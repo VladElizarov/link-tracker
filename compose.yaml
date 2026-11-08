@@ -1,0 +1,218 @@
+x-kafka-common: &kafka-common
+  CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+services:
+  postgresql:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: scrapper
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d scrapper" ]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  liquibase-migrations:
+    image: liquibase/liquibase:4.31.1
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    command:
+      - --searchPath=/liquibase/changelog
+      - --changelog-file=master.xml
+      - --driver=org.postgresql.Driver
+      - --url=jdbc:postgresql://postgresql:5432/scrapper
+      - --username=${POSTGRES_USER:-postgres}
+      - --password=${POSTGRES_PASSWORD:-postgres}
+      - update
+    volumes:
+      - ./migrations:/liquibase/changelog
+
+  kafka-1:
+    image: apache/kafka:3.9.1
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:19092,PLAINTEXT_HOST://localhost:29092
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    image: apache/kafka:3.9.1
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093,PLAINTEXT_HOST://:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:19092,PLAINTEXT_HOST://localhost:29093
+    ports:
+      - "29093:29093"
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    image: apache/kafka:3.9.1
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093,PLAINTEXT_HOST://:29094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:19092,PLAINTEXT_HOST://localhost:29094
+    ports:
+      - "29094:29094"
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: link-tracker
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092
+
+  valkey-net:
+    image: valkey/valkey:8.1.11
+    entrypoint: [ "sleep", "infinity" ]
+    ports:
+      - "6381:6381"
+      - "6382:6382"
+      - "6383:6383"
+      - "26381:26381"
+      - "26382:26382"
+      - "26383:26383"
+
+  valkey-1:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    command:
+      - valkey-server
+      - --port
+      - "6381"
+      - --appendonly
+      - "yes"
+    volumes:
+      - valkey-1-data:/data
+
+  valkey-2:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    command:
+      - valkey-server
+      - --port
+      - "6382"
+      - --appendonly
+      - "yes"
+      - --replicaof
+      - 127.0.0.1
+      - "6381"
+    volumes:
+      - valkey-2-data:/data
+
+  valkey-3:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    command:
+      - valkey-server
+      - --port
+      - "6383"
+      - --appendonly
+      - "yes"
+      - --replicaof
+      - 127.0.0.1
+      - "6381"
+    volumes:
+      - valkey-3-data:/data
+
+  valkey-sentinel-1:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /tmp/sentinel.conf <<EOF
+        port 26381
+        sentinel monitor mymaster 127.0.0.1 6381 2
+        sentinel down-after-milliseconds mymaster 5000
+        sentinel failover-timeout mymaster 15000
+        sentinel parallel-syncs mymaster 1
+        EOF
+        exec valkey-sentinel /tmp/sentinel.conf
+
+  valkey-sentinel-2:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /tmp/sentinel.conf <<EOF
+        port 26382
+        sentinel monitor mymaster 127.0.0.1 6381 2
+        sentinel down-after-milliseconds mymaster 5000
+        sentinel failover-timeout mymaster 15000
+        sentinel parallel-syncs mymaster 1
+        EOF
+        exec valkey-sentinel /tmp/sentinel.conf
+
+  valkey-sentinel-3:
+    image: valkey/valkey:8.1.11
+    network_mode: service:valkey-net
+    depends_on:
+      - valkey-net
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /tmp/sentinel.conf <<EOF
+        port 26383
+        sentinel monitor mymaster 127.0.0.1 6381 2
+        sentinel down-after-milliseconds mymaster 5000
+        sentinel failover-timeout mymaster 15000
+        sentinel parallel-syncs mymaster 1
+        EOF
+        exec valkey-sentinel /tmp/sentinel.conf
+
+volumes:
+  postgres-data:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
+  valkey-1-data:
+  valkey-2-data:
+  valkey-3-data:

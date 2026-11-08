@@ -1,0 +1,75 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: scrapper
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/scrapper}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  liquibase:
+    enabled: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092,localhost:29093,localhost:29094}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        spring.json.add.type.headers: false
+        enable.idempotence: true
+        linger.ms: 5
+        max.block.ms: 10000
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 15000
+
+app:
+  message-transport: ${APP_MESSAGE_TRANSPORT:KAFKA}
+  bot-url: ${BOT_URL:http://localhost:8080}
+  kafka:
+    topic: link-updates
+    partitions: 3
+    replicas: ${APP_KAFKA_REPLICAS:3}
+    min-insync-replicas: ${APP_KAFKA_MIN_INSYNC_REPLICAS:2}
+    send-timeout: 15s
+  cache:
+    mode: ${APP_CACHE_MODE:VALKEY}
+    ttl: ${APP_CACHE_TTL:10m}
+  valkey:
+    sentinel-master: ${VALKEY_SENTINEL_MASTER:mymaster}
+    sentinel-nodes: ${VALKEY_SENTINEL_NODES:localhost:26381,localhost:26382,localhost:26383}
+    url: ${VALKEY_URL:redis://localhost:6381}
+    timeout: 500ms
+  outbox:
+    enable: true
+    interval: 1s
+    batch-size: 100
+  github:
+    url: https://api.github.com
+    token: ${GITHUB_TOKEN:}
+  stack-overflow:
+    url: https://api.stackexchange.com
+    key: ${STACKOVERFLOW_KEY:}
+  scheduler:
+    enable: true
+    interval: ${APP_SCHEDULER_INTERVAL:60s}
+    batch-size: ${APP_SCHEDULER_BATCH_SIZE:100}
+    threads: ${APP_SCHEDULER_THREADS:4}
+  database:
+    access-type: ${APP_DATABASE_ACCESS_TYPE:SQL}
+
+logging:
+  level:
+    org.apache.kafka: WARN
+  structured:
+    format:
+      console: logstash

@@ -1,0 +1,46 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: bot
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092,localhost:29093,localhost:29094}
+    consumer:
+      group-id: bot
+      auto-offset-reset: earliest
+      key-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.key.delegate.class: org.apache.kafka.common.serialization.StringDeserializer
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.value.default.type: ru.tbank.common.dto.LinkUpdate
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: ru.tbank.common.dto
+    producer:
+      acks: all
+
+app:
+  telegram-token: ${TELEGRAM_TOKEN:}
+  scrapper-url: ${SCRAPPER_URL:http://localhost:8081}
+  message-transport: ${APP_MESSAGE_TRANSPORT:KAFKA}
+  kafka:
+    topic: link-updates
+    dlq-topic: link-updates-dlq
+    partitions: 3
+    replicas: ${APP_KAFKA_REPLICAS:3}
+    min-insync-replicas: ${APP_KAFKA_MIN_INSYNC_REPLICAS:2}
+    retry:
+      max-attempts: ${APP_KAFKA_RETRY_MAX_ATTEMPTS:3}
+      backoff: 2s
+
+logging:
+  level:
+    org.apache.kafka: WARN
+  structured:
+    format:
+      console: logstash
